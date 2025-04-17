@@ -1,0 +1,61 @@
+[tool.poetry]
+name = "management"
+version = "0.1.0"
+description = "Django management application for database and admin operations"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+django = "^4.2.7"
+djangorestframework = "^3.14.0"
+django-cors-headers = "^4.3.0"
+psycopg2-binary = "^2.9.9"
+celery = "^5.3.4"
+django-celery-results = "^2.5.1"
+django-celery-beat = "^2.5.0"
+redis = "^5.0.1"
+gunicorn = "^21.2.0"
+python-dotenv = "^1.0.0"
+pydantic = "^2.4.2"
+pydantic-settings = "^2.0.3"
+drf-spectacular = "^0.26.5"
+django-debug-toolbar = "^5.1.0"
+django-browser-reload = "^1.18.0"
+djangorestframework-simplejwt = "^5.5.0"
+dj-database-url = "^2.3.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.10.1"
+isort = "^5.12.0"
+flake8 = "^6.1.0"
+pytest = "^7.4.3"
+pytest-django = "^4.5.2"
+pytest-cov = "^4.1.0"
+mypy = "^1.6.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.development"
+python_files = "test_*.py"
+testpaths = ["tests"]
