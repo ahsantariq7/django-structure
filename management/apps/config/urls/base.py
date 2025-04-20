@@ -17,7 +17,6 @@ admin.site.site_title = "Management Admin"
 admin.site.index_title = "Administration"
 
 urlpatterns = [
-
     # Admin interface
     path("admin/", admin.site.urls),
     # Include API URLs

@@ -11,7 +11,7 @@ import sys
 
 
 class Command(StartAppCommand):
-    help = "Creates a Django app in the apps directory"
+    help = "Creates a Django app in the apps directory or a custom directory"
 
     def add_arguments(self, parser):
         super().add_arguments(parser)
@@ -20,9 +20,21 @@ class Command(StartAppCommand):
             action="store_true",
             help="Register the app in INSTALLED_APPS automatically",
         )
+        parser.add_argument(
+            "--directory",
+            help="Custom directory to create the app in (relative to project root)",
+            default=None,
+        )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Force creation even if directory exists",
+        )
 
     def handle(self, **options):
         app_name = options["name"]
+        custom_dir = options["directory"]
+        force = options.get("force", False)
 
         # Check for reserved app names
         RESERVED_APP_NAMES = [
@@ -46,14 +58,54 @@ class Command(StartAppCommand):
                 f"Using it as an app name may cause conflicts. Please choose a different name."
             )
 
-        # Set target directory to be inside apps/
-        target = Path(settings.APPS_DIR) / app_name
+        # Determine where to create the app
+        if custom_dir is None:
+            # If no custom directory provided, ask if user wants a custom location
+            use_custom = input("Create app in a custom directory instead of 'apps'? [y/N]: ")
+            if use_custom.lower() == "y":
+                custom_dir = input("Enter directory path (relative to project root): ")
+
+        if custom_dir:
+            # Create the app in a custom directory
+            parent_dir = Path(settings.ROOT_DIR) / custom_dir
+
+            # Create parent directory if it doesn't exist
+            if not parent_dir.exists():
+                confirm = input(f"Directory '{custom_dir}' doesn't exist. Create it? [Y/n]: ")
+                if confirm.lower() not in ["", "y", "yes"]:
+                    self.stdout.write(self.style.ERROR("App creation cancelled."))
+                    return
+                parent_dir.mkdir(parents=True)
+                # Create __init__.py in each directory level
+                current = parent_dir
+                while current != settings.ROOT_DIR:
+                    init_file = current / "__init__.py"
+                    init_file.touch(exist_ok=True)
+                    current = current.parent
+
+            # Set target to the custom directory
+            target = parent_dir / app_name
+
+            # Convert filesystem path to Python module path (replace / with .)
+            module_path = custom_dir.replace("/", ".").replace("\\", ".")
+            if module_path.endswith("."):
+                module_path = module_path[:-1]
+            module_path = f"{module_path}.{app_name}"
+        else:
+            # Set target directory to be inside apps/
+            target = Path(settings.APPS_DIR) / app_name
+            module_path = f"apps.{app_name}"
+
+        # Check if target directory already exists
+        if target.exists() and not force:
+            raise CommandError(f"Directory '{target}' already exists. Use --force to overwrite.")
 
         # Create the full target directory structure first
         target.mkdir(parents=True, exist_ok=True)
 
         # Create __init__.py files in the directory structure
-        Path(settings.APPS_DIR / "__init__.py").touch(exist_ok=True)
+        if not custom_dir:
+            Path(settings.APPS_DIR / "__init__.py").touch(exist_ok=True)
 
         options["directory"] = str(target)
 
@@ -61,36 +113,33 @@ class Command(StartAppCommand):
         super().handle(**options)
 
         # Fix the apps.py file to use the correct import path
-        self._fix_apps_file(app_name, target)
+        self._fix_apps_file(app_name, target, module_path)
 
         # Create URLs and views
         self._create_urls_file(app_name, target)
         self._enhance_views_file(app_name, target)
 
         # Register URLs in the main URL configuration
-        self._register_urls(app_name)
+        self._register_urls(app_name, module_path)
 
-        self.stdout.write(
-            self.style.SUCCESS(f"App '{app_name}' created successfully in apps/{app_name}!")
-        )
+        # Register in INSTALLED_APPS if requested or in a custom directory
+        if options.get("register", False) or custom_dir:
+            self._register_in_installed_apps(module_path)
+
+        self.stdout.write(self.style.SUCCESS(f"App '{app_name}' created successfully in {target}!"))
 
         self.stdout.write(self.style.SUCCESS(f"Test URL created at /{app_name}/test/"))
 
-        # Auto-discovery should handle the app registration
-        # since it's in the apps/ directory and has apps.py
-        self.stdout.write(
-            self.style.SUCCESS(
-                "Your app will be automatically discovered by the app_discovery system."
-            )
-        )
+        # Auto-discovery message
+        self.stdout.write(self.style.SUCCESS(f"App registered as '{module_path}'."))
 
-    def _fix_apps_file(self, app_name, target_dir):
+    def _fix_apps_file(self, app_name, target_dir, module_path):
         """Update the apps.py file to use the correct app name"""
         apps_file = target_dir / "apps.py"
         if apps_file.exists():
             content = apps_file.read_text()
             # Replace the default app name with the proper dotted path
-            content = content.replace(f'name = "{app_name}"', f'name = "apps.{app_name}"')
+            content = content.replace(f'name = "{app_name}"', f'name = "{module_path}"')
             apps_file.write_text(content)
 
     def _create_urls_file(self, app_name, target_dir):
@@ -114,53 +163,72 @@ urlpatterns = [
         self.stdout.write(self.style.SUCCESS(f"Created URLs file at {urls_file}"))
 
     def _enhance_views_file(self, app_name, target_dir):
-        """Add test views to the views.py file"""
+        """Add detailed API views to the views.py file with Swagger documentation"""
         views_file = target_dir / "views.py"
+
         if views_file.exists():
-            # Get existing content
+            # Keep the existing content
             content = views_file.read_text()
 
-            # Add imports if not already there
-            if "from django.http import JsonResponse" not in content:
-                content = (
-                    "from django.http import JsonResponse\nfrom django.shortcuts import render\n"
-                    + content
-                )
+            # Define imports for DRF, Swagger, and rendering
+            imports = """
+from django.http import JsonResponse
+from django.shortcuts import render
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
+"""
 
-            # Add test views
-            test_views = f'''
-def index_view(request):
-    """Index view for {app_name} app."""
-    data = {{
-        "app": "{app_name}",
-        "status": "ok",
-        "message": "Welcome to the {app_name} API."
-    }}
-    return JsonResponse(data)
+            # Add test views with Swagger documentation
+            test_views = f"""
 
-def test_view(request):
-    """Test view for {app_name} app."""
-    context = {{
-        "app_name": "{app_name}",
-        "message": "This is a test view for the {app_name} app."
-    }}
-    return render(request, "base.html", context)
-
+@extend_schema(
+    tags=["{app_name}"],
+    summary="Test API endpoint for {app_name}",
+    description="This is a test API endpoint for the {app_name} app",
+    responses={{200: {{'type': 'object', 'properties': {{'app': {{'type': 'string'}}, 'status': {{'type': 'string'}}, 'message': {{'type': 'string'}}}}}}}}
+)
+@api_view(['GET'])
 def api_test_view(request):
-    """API test view for {app_name} app."""
     data = {{
         "app": "{app_name}",
         "status": "ok",
         "message": "This is a test API endpoint for the {app_name} app."
     }}
-    return JsonResponse(data)
-'''
-            # Add the test views to the file
-            content += test_views
-            views_file.write_text(content)
-            self.stdout.write(self.style.SUCCESS(f"Enhanced views file at {views_file}"))
+    return Response(data)
 
-    def _register_urls(self, app_name):
+def index_view(request):
+    \"\"\"Index view for {app_name} app.\"\"\"
+    context = {{
+        "app_name": "{app_name}",
+        "message": "Welcome to the {app_name} app."
+    }}
+    return render(request, "base.html", context)
+
+def test_view(request):
+    \"\"\"Test view for {app_name} app.\"\"\"
+    context = {{
+        "app_name": "{app_name}",
+        "message": "This is a test view for the {app_name} app."
+    }}
+    return render(request, "base.html", context)
+"""
+
+            # Check if we need to add the imports
+            if "from drf_spectacular.utils import extend_schema" not in content:
+                content = imports + content
+
+            # Check if we need to add the test views
+            if "@extend_schema" not in content and "def api_test_view" not in content:
+                content += test_views
+                views_file.write_text(content)
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"Enhanced views file with Swagger documentation at {views_file}"
+                    )
+                )
+
+    def _register_urls(self, app_name, module_path):
         """Register the app's URLs in the main URL configuration"""
         try:
             # Locate the main URL configuration file
@@ -180,7 +248,7 @@ def api_test_view(request):
 
                 # Only proceed if the app namespace isn't already registered
                 if namespace_pattern not in content:
-                    app_import = f"path('{app_name}/', include('apps.{app_name}.urls', namespace='{app_name}'))"
+                    app_import = f"path('{app_name}/', include('{module_path}.urls', namespace='{app_name}'))"
 
                     # Process the file line by line to ensure we add to the right urlpatterns
                     lines = content.split("\n")
@@ -207,6 +275,11 @@ def api_test_view(request):
                         self.stdout.write(
                             self.style.SUCCESS(f"Registered {app_name} URLs in {base_urls_file}")
                         )
+                        self.stdout.write(
+                            self.style.SUCCESS(
+                                f"API endpoints are documented in Swagger UI at /api/docs/"
+                            )
+                        )
                     else:
                         self.stdout.write(
                             self.style.WARNING(
@@ -221,3 +294,68 @@ def api_test_view(request):
                     )
         except Exception as e:
             self.stdout.write(self.style.WARNING(f"Could not register URLs: {e}"))
+
+    def _register_in_installed_apps(self, module_path):
+        """Add the app to INSTALLED_APPS in settings"""
+        try:
+            # First try to use the utility function if available
+            try:
+                from apps.config.utils.app_discovery import register_app
+
+                if register_app(module_path):
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f"Added '{module_path}' to INSTALLED_APPS using auto-discovery"
+                        )
+                    )
+                    return
+            except ImportError:
+                pass  # Fall back to the manual method
+
+            # Fall back to manually updating the settings file
+            settings_file = settings.ROOT_DIR / "apps" / "config" / "settings" / "base.py"
+
+            if settings_file.exists():
+                content = settings_file.read_text()
+
+                # Check if the app is already in INSTALLED_APPS
+                if f"'{module_path}'" in content or f'"{module_path}"' in content:
+                    self.stdout.write(
+                        self.style.SUCCESS(f"App '{module_path}' already in INSTALLED_APPS")
+                    )
+                    return
+
+                # First try to add to LOCAL_APPS if that section exists
+                if "LOCAL_APPS = [" in content:
+                    new_content = content.replace(
+                        "LOCAL_APPS = [", f"LOCAL_APPS = [\n    '{module_path}',"
+                    )
+                    settings_file.write_text(new_content)
+                    self.stdout.write(self.style.SUCCESS(f"Added '{module_path}' to LOCAL_APPS"))
+                    return
+
+                # If not, try CUSTOM_APPS
+                if "CUSTOM_APPS = [" in content:
+                    new_content = content.replace(
+                        "CUSTOM_APPS = [", f"CUSTOM_APPS = [\n    '{module_path}',"
+                    )
+                    settings_file.write_text(new_content)
+                    self.stdout.write(self.style.SUCCESS(f"Added '{module_path}' to CUSTOM_APPS"))
+                    return
+
+                # Finally fall back to INSTALLED_APPS directly
+                if "INSTALLED_APPS = [" in content:
+                    new_content = content.replace(
+                        "INSTALLED_APPS = [", f"INSTALLED_APPS = [\n    '{module_path}',"
+                    )
+                    settings_file.write_text(new_content)
+                    self.stdout.write(
+                        self.style.SUCCESS(f"Added '{module_path}' to INSTALLED_APPS")
+                    )
+                    return
+
+                self.stdout.write(
+                    self.style.WARNING("Could not find appropriate section in settings to add app")
+                )
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f"Could not update INSTALLED_APPS: {e}"))

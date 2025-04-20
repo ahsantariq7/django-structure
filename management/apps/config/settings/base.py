@@ -95,18 +95,35 @@ THIRD_PARTY_APPS = [
     "django_browser_reload",
 ]
 
-# Auto-discover local apps
+# Settings for application discovery and loading
+# ===========================================================
+
+# Auto-discover all apps in the project
 try:
-    from apps.config.utils.app_discovery import discover_apps
+    from apps.config.utils.app_discovery import discover_apps, discover_all_apps
 
-    LOCAL_APPS = discover_apps(APPS_DIR)
+    # Get apps from the standard apps directory (including nested ones)
+    LOCAL_APPS = discover_apps(APPS_DIR, include_subdirs=True)
+
+    # Discover apps in custom directories
+    CUSTOM_APPS = []
+
+    try:
+        # Get all apps throughout the project
+        all_apps = discover_all_apps(ROOT_DIR)
+
+        # Filter out the ones already in the standard apps directory
+        CUSTOM_APPS = [app for app in all_apps if app not in LOCAL_APPS]
+    except Exception as e:
+        print(f"Warning: Error discovering custom apps: {e}")
+
 except ImportError:
-    # Fallback to manually defined apps
-    LOCAL_APPS = [
-        # "apps.core",
-    ]
+    # Fallback if app_discovery module is not available
+    LOCAL_APPS = []
+    CUSTOM_APPS = []
 
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS + ["apps.config"]
+# Combine all the app lists
+INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS + CUSTOM_APPS + ["apps.config"]
 
 # MIDDLEWARE CONFIGURATION
 # ------------------------------------------------------------------------------
