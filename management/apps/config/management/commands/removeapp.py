@@ -128,19 +128,19 @@ class Command(BaseCommand):
         try:
             # Find the settings file
             settings_file = settings.ROOT_DIR / "apps" / "config" / "settings" / "base.py"
-
+            
             if settings_file.exists():
                 content = settings_file.read_text()
-
+                
                 # Check for both single and double quotes
                 app_patterns = [f"'{module_path}'", f'"{module_path}"']
-
+                
                 # Process the file line by line
                 lines = content.split("\n")
-                filtered_lines = []
+                new_lines = []
                 removed = False
-
-                for line in lines:
+                
+                for i, line in enumerate(lines):
                     # Check if this line contains our app
                     if any(pattern in line for pattern in app_patterns):
                         # Check if it's in any of the app lists
@@ -156,18 +156,32 @@ class Command(BaseCommand):
                                 ):
                                     is_app_line = True
                                     break
-
+                        
                         if is_app_line:
                             removed = True
+                            
+                            # If this line has a closing bracket we need to preserve it
+                            if "]" in line:
+                                # Always add the closing bracket
+                                new_lines.append("]")
+                                
+                                # If there was a comma in previous line and it's now the last item
+                                if i > 0 and "," in lines[i-1] and new_lines:
+                                    # Remove trailing comma from previous line if this was the last entry
+                                    prev_line = new_lines[-1]
+                                    if prev_line.strip().endswith(","):
+                                        new_lines[-1] = prev_line.rstrip(",")
+                        
                             self.stdout.write(
                                 self.style.SUCCESS(f"Removed '{module_path}' from settings")
                             )
                             continue
-                    filtered_lines.append(line)
-
+                    
+                    new_lines.append(line)
+                
                 if removed:
                     # Write the updated content back to the file
-                    settings_file.write_text("\n".join(filtered_lines))
+                    settings_file.write_text("\n".join(new_lines))
                     self.stdout.write(self.style.SUCCESS(f"Updated settings in {settings_file}"))
                 else:
                     self.stdout.write(
@@ -330,20 +344,33 @@ def remove_app_standalone(
             app_patterns = [f"'{module_path}'", f'"{module_path}"']
 
             # Search through the content looking for the app in any app list
+            lines = content.split("\n")
+            new_lines = []
             app_found = False
-            new_content = []
 
-            for line in content.split("\n"):
+            for i, line in enumerate(lines):
                 # Check if this line contains our app
                 if any(pattern in line for pattern in app_patterns):
                     # Now check if it's part of an app list
                     app_found = True
-                    continue
-                new_content.append(line)
+
+                    # If this line has a closing bracket we need to preserve it
+                    if "]" in line:
+                        # Always add the closing bracket
+                        new_lines.append("]")
+                        
+                        # If there was a comma in previous line and it's now the last item
+                        if i > 0 and "," in lines[i-1] and new_lines:
+                            # Remove trailing comma from previous line if this was the last entry
+                            prev_line = new_lines[-1]
+                            if prev_line.strip().endswith(","):
+                                new_lines[-1] = prev_line.rstrip(",")
+                else:
+                    new_lines.append(line)
 
             if app_found:
                 with open(settings_file, "w") as f:
-                    f.write("\n".join(new_content))
+                    f.write("\n".join(new_lines))
                 print(f"Removed '{module_path}' from settings")
     except Exception as e:
         print(f"Warning: Could not update settings: {e}")
