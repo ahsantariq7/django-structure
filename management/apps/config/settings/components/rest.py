@@ -59,26 +59,30 @@ REST_FRAMEWORK = {
 # DRF SPECTACULAR SETTINGS
 # ------------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Management API",
-    "DESCRIPTION": "API documentation for Management system",
+    "TITLE": "API Documentation",
+    "DESCRIPTION": "API documentation for all applications",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
-    # Optional UI customization
+    # Automatically add app names as tags
+    "TAG_NAMESPACES": True,
+    # Group endpoints by app
+    "SCHEMA_PATH_PREFIX_INSERT": False,
+    "SCHEMA_PATH_PREFIX": r"/api/(?P<version>\w+)?",
+    # Component settings
+    "COMPONENT_SPLIT_REQUEST": True,
+    "COMPONENT_SPLIT_RESPONSE": True,
+    # Include all endpoints in schema
+    "ENUM_ADD_EXPLICIT_BLANK_NULL_CHOICE": False,
+    # Extensions
     "SWAGGER_UI_SETTINGS": {
         "deepLinking": True,
         "persistAuthorization": True,
         "displayOperationId": True,
+        "filter": True,
     },
-    # Patterns to exclude from schema
-    "SCHEMA_PATH_PREFIX": r"/api/",
-    # Add custom configurations
-    "COMPONENT_SPLIT_REQUEST": True,
-    "TAGS": [
-        # {"name": "auth", "description": "Authentication operations"},
-        # {"name": "users", "description": "User management"},
-        # {"name": "api", "description": "API operations"},
-        # Add more tags as you add more apps
-    ],
+    # Generate schema with all installed apps
+    "APPEND_COMPONENTS": {},
+    "SORT_OPERATIONS": True,
 }
 
 # CORS settings - control which domains can access the API
