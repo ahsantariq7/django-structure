@@ -17,6 +17,7 @@ admin.site.site_title = "Management Admin"
 admin.site.index_title = "Administration"
 
 urlpatterns = [
+    path('authentication/', include('apps.authentication.urls', namespace='authentication')),
     # Admin interface
     path("admin/", admin.site.urls),
     # Include API URLs
