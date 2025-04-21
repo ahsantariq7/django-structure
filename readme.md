@@ -386,6 +386,40 @@ Renames a Django app throughout the project. The command will:
 - Update migration files
 - Update app references in models and other files
 
+#### Move App Command
+
+```bash
+# Move an app from one location to another
+python manage.py moveapp myapp source_dir target_dir
+```
+
+**Options:**
+- `--force`: Force move without confirmation
+- `--dry-run`: Show what would be done without making changes
+
+**Description:**
+Moves a Django app from one location to another and updates all references. The command will:
+- Move the app directory from source to target location
+- Update references in INSTALLED_APPS
+- Update URL patterns
+- Update import statements in all Python files
+- Handle both standard and custom app locations
+
+**Examples:**
+```bash
+# Move an app from apps directory to a custom directory
+python manage.py moveapp myapp apps custom_apps
+
+# Move an app from a custom directory to the apps directory
+python manage.py moveapp myapp custom_apps apps
+
+# Preview changes without making them
+python manage.py moveapp myapp apps custom_apps --dry-run
+
+# Force move without confirmation
+python manage.py moveapp myapp apps custom_apps --force
+```
+
 ### Database Management
 
 #### Fix Migrations Command

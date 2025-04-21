@@ -23,6 +23,7 @@ Excited to share my latest project combining Django for management and FastAPI f
 • `python manage.py createapp myapp` - Create new app
 • `python manage.py removeapp myapp` - Remove app
 • `python manage.py renameapp myapp newapp` - Rename app
+• `python manage.py moveapp myapp source_dir target_dir` - Move app between directories
 
 🔄 Migration & DB:
 • `python manage.py fixmigrations` - Fix migration issues
