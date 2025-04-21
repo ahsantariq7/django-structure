@@ -330,38 +330,104 @@ uvicorn app.main:app --reload
 
 ### App Management
 
+#### Create App Command
+
 ```bash
 # Create a new Django app
 python manage.py createapp myapp
+```
 
+**Options:**
+- `--register`: Register the app in INSTALLED_APPS automatically
+- `--directory`: Custom directory to create the app in (relative to project root)
+- `--force`: Force creation even if directory exists
+
+**Description:**
+Creates a Django app in the apps directory or a custom directory. The command will:
+- Create the app structure with all necessary files
+- Register the app in INSTALLED_APPS if requested
+- Create a basic URLs file
+- Enhance the views file with common imports and patterns
+
+#### Remove App Command
+
+```bash
 # Remove an existing app
 python manage.py removeapp myapp
+```
 
+**Options:**
+- `--force`: Force removal without confirmation
+- `--keep-migrations`: Keep database migrations
+- `--directory`: Custom directory where the app is located (relative to project root)
+
+**Description:**
+Completely removes a Django app from the project. The command will:
+- Remove the app directory
+- Remove the app from INSTALLED_APPS
+- Remove URL patterns referencing the app
+- Remove migrations if requested
+
+#### Rename App Command
+
+```bash
 # Rename an app
 python manage.py renameapp myapp newapp
 ```
 
+**Options:**
+- `--force`: Force rename without confirmation
+
+**Description:**
+Renames a Django app throughout the project. The command will:
+- Rename the app directory
+- Update references in INSTALLED_APPS
+- Update URL patterns
+- Update migration files
+- Update app references in models and other files
+
 ### Database Management
+
+#### Fix Migrations Command
 
 ```bash
 # Fix migration issues
 python manage.py fixmigrations
+```
 
-# Preview migration fixes without making changes
-python manage.py fixmigrations --dry-run
+**Options:**
+- `--dry-run`: Show what would be done without making changes
+- `--force`: Force fixing migrations without confirmation
+- `--fake-initial`: Use --fake-initial flag when applying missing migrations
+- `--fix-contenttypes`: Fix stale content types
 
-# Fix stale content types
-python manage.py fixmigrations --fix-contenttypes
+**Description:**
+Fixes inconsistent migration history by analyzing and repairing dependency issues. The command will:
+- Find inconsistencies in migration dependencies
+- Find ghost migrations (migrations that exist in the database but not in the files)
+- Find missing migrations (migrations that exist in the files but not in the database)
+- Fix stale content types if requested
+- Apply fixes with appropriate flags
 
-# Apply missing migrations with --fake-initial
-python manage.py fixmigrations --fake-initial
+#### Clear Database Command
 
-# Skip confirmation prompt
-python manage.py fixmigrations --force
-
+```bash
 # Clear database
 python manage.py clear_database
 ```
+
+**Options:**
+- `--force`: Force clearing without confirmation
+- `--preserve-migrations`: Preserve django_migrations table
+- `--truncate`: Truncate tables instead of dropping them
+- `--standalone`: Run in standalone mode without full Django initialization
+
+**Description:**
+Removes all tables from the database (WARNING: Destructive operation). The command will:
+- List all tables in the database
+- Drop or truncate tables based on the options
+- Preserve the migrations table if requested
+- Handle different database backends appropriately
 
 ## Deployment
 
