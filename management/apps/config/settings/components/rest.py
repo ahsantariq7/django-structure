@@ -13,9 +13,7 @@ from datetime import timedelta
 REST_FRAMEWORK = {
     # Default authentication classes
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.TokenAuthentication",
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.authentication.backends.CustomJWTAuthentication",
     ],
     # Default permission classes
     "DEFAULT_PERMISSION_CLASSES": [
@@ -59,30 +57,54 @@ REST_FRAMEWORK = {
 # DRF SPECTACULAR SETTINGS
 # ------------------------------------------------------------------------------
 SPECTACULAR_SETTINGS = {
-    "TITLE": "API Documentation",
-    "DESCRIPTION": "API documentation for all applications",
+    "TITLE": "Management API",
+    "DESCRIPTION": "API documentation for Management System",
     "VERSION": "1.0.0",
-    "SERVE_INCLUDE_SCHEMA": False,
-    # Automatically add app names as tags
-    "TAG_NAMESPACES": True,
-    # Group endpoints by app
-    "SCHEMA_PATH_PREFIX_INSERT": False,
-    "SCHEMA_PATH_PREFIX": r"/api/(?P<version>\w+)?",
-    # Component settings
-    "COMPONENT_SPLIT_REQUEST": True,
-    "COMPONENT_SPLIT_RESPONSE": True,
-    # Include all endpoints in schema
-    "ENUM_ADD_EXPLICIT_BLANK_NULL_CHOICE": False,
-    # Extensions
+    "SERVE_INCLUDE_SCHEMA": True,
     "SWAGGER_UI_SETTINGS": {
-        "deepLinking": True,
         "persistAuthorization": True,
         "displayOperationId": True,
         "filter": True,
     },
-    # Generate schema with all installed apps
-    "APPEND_COMPONENTS": {},
-    "SORT_OPERATIONS": True,
+    # Authentication settings
+    "SECURITY": [{"bearerAuth": []}],
+    "COMPONENTS": {
+        "SECURITYSCHEMES": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+            }
+        }
+    },
+    # Swagger UI settings
+    "SWAGGER_UI_SETTINGS": {
+        "persistAuthorization": True,
+        "displayOperationId": True,
+        "filter": True,
+        "tryItOutEnabled": True,
+        "docExpansion": "list",
+        "defaultModelExpandDepth": 3,
+    },
+    # Schema generation settings
+    "SERVE_INCLUDE_SCHEMA": True,
+    "SERVE_PUBLIC": True,
+    "COMPONENT_SPLIT_REQUEST": True,
+    "COMPONENT_SPLIT_RESPONSE": True,
+    # Operation sorting
+    "SORT_OPERATIONS": False,
+    # Authentication settings
+    "SERVE_AUTHENTICATION": True,
+    "SERVE_PERMISSIONS": True,
+    # Additional settings
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+    # Schema generation settings
+    "POSTPROCESSING_HOOKS": [
+        "drf_spectacular.hooks.postprocess_schema_enums",
+        "drf_spectacular.contrib.djangorestframework_camel_case.camelize_serializer_fields",
+    ],
 }
 
 # CORS settings - control which domains can access the API
@@ -116,19 +138,22 @@ CORS_ALLOW_HEADERS = [
 # ------------------------------------------------------------------------------
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
     "ALGORITHM": "HS256",
-    "SIGNING_KEY": os.environ.get("SECRET_KEY"),
+    "SIGNING_KEY": os.environ.get("DJANGO_SECRET_KEY"),
+    "VERIFYING_KEY": None,
+    "AUDIENCE": None,
+    "ISSUER": None,
     "AUTH_HEADER_TYPES": ("Bearer",),
     "AUTH_HEADER_NAME": "HTTP_AUTHORIZATION",
     "USER_ID_FIELD": "id",
     "USER_ID_CLAIM": "user_id",
+    "USER_AUTHENTICATION_RULE": "rest_framework_simplejwt.authentication.default_user_authentication_rule",
+    "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
     "TOKEN_TYPE_CLAIM": "token_type",
+    "TOKEN_USER_CLASS": "rest_framework_simplejwt.models.TokenUser",
     "JTI_CLAIM": "jti",
-    "SLIDING_TOKEN_REFRESH_EXP_CLAIM": "refresh_exp",
-    "SLIDING_TOKEN_LIFETIME": timedelta(minutes=60),
-    "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=7),
 }

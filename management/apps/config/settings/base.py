@@ -32,6 +32,15 @@ USE_TZ = True
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Custom user model
+AUTH_USER_MODEL = "authentication.User"
+
+# Authentication backends
+AUTHENTICATION_BACKENDS = [
+    "apps.authentication.backends.EmailOrUsernameModelBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+
 # STATIC FILES CONFIGURATION
 # ------------------------------------------------------------------------------
 # See: https://docs.djangoproject.com/en/dev/ref/settings/#static-url
@@ -84,6 +93,7 @@ DJANGO_APPS = [
     "drf_spectacular",
     "rest_framework.authtoken",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "debug_toolbar",
 ]
 
@@ -154,3 +164,49 @@ ROOT_URLCONF = "apps.config.urls.base"
 # ------------------------------------------------------------------------------
 WSGI_APPLICATION = "apps.config.wsgi.application"
 ASGI_APPLICATION = "apps.config.asgi.application"
+
+# Swagger Settings
+SWAGGER_SETTINGS = {
+    "SECURITY_DEFINITIONS": {"Bearer": {"type": "apiKey", "name": "Authorization", "in": "header"}},
+    "USE_SESSION_AUTH": False,
+    "JSON_EDITOR": True,
+}
+
+# ReDoc Settings
+REDOC_SETTINGS = {
+    "LAZY_RENDERING": True,
+    "NATIVE_SCROLLBARS": True,
+    "REQUIRED_PROPS_FIRST": True,
+    "NO_AUTO_AUTH": True,
+}
+
+# DRF Spectacular Settings
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Management API",
+    "DESCRIPTION": "API documentation for Management System",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SWAGGER_UI_SETTINGS": {
+        "deepLinking": True,
+        "persistAuthorization": True,
+        "displayOperationId": True,
+        "filter": True,
+    },
+    "COMPONENT_SPLIT_REQUEST": True,
+    "COMPONENT_SPLIT_RESPONSE": True,
+    "SORT_OPERATIONS": True,
+    "TAGS_SORTER": "alpha",
+    "OPERATIONS_SORTER": "alpha",
+    "DOC_EXPANSION": "none",
+    "DEFAULT_MODEL_RENDERING": "example",
+}
+
+REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.authentication.backends.CustomJWTAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
