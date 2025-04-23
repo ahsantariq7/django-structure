@@ -18,6 +18,7 @@ from apps.config.settings.components.database import *  # noqa
 from apps.config.settings.components.caching import *  # noqa
 from apps.config.settings.components.celery import *  # noqa
 from apps.config.settings.components.rest import *  # noqa
+from apps.config.settings.components.email import *  # noqa
 
 # GENERAL CONFIGURATION
 # ------------------------------------------------------------------------------
@@ -65,7 +66,7 @@ TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [
-            str(ROOT_DIR / "templates"),  # Project-wide templates
+            os.path.join(ROOT_DIR, "templates"),
         ],
         "APP_DIRS": True,
         "OPTIONS": {
@@ -89,7 +90,6 @@ DJANGO_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "django.contrib.sites",
     "drf_spectacular",
     "rest_framework.authtoken",
     "rest_framework_simplejwt",

@@ -5,6 +5,9 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import AccessToken
+from django.core.mail.backends.smtp import EmailBackend as SMTPBackend
+from django.core.mail.backends.console import EmailBackend as ConsoleBackend
+from django.core.mail import EmailMultiAlternatives
 
 User = get_user_model()
 
@@ -70,3 +73,22 @@ class CustomJWTAuthentication(JWTAuthentication):
         """
         # Use our custom token class
         return CustomAccessToken(raw_token)
+
+
+class DualEmailBackend:
+    """
+    Custom email backend that sends emails both via SMTP and to the console
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.smtp_backend = SMTPBackend(*args, **kwargs)
+        self.console_backend = ConsoleBackend(*args, **kwargs)
+
+    def send_messages(self, email_messages):
+        # Send via SMTP
+        smtp_result = self.smtp_backend.send_messages(email_messages)
+
+        # Also send to console
+        console_result = self.console_backend.send_messages(email_messages)
+
+        return smtp_result  # Return SMTP result as primary result

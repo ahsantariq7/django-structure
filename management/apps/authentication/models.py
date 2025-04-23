@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.utils.translation import gettext_lazy as _
+import uuid
 
 
 class User(AbstractUser):
@@ -18,6 +19,8 @@ class User(AbstractUser):
     address = models.TextField(null=True, blank=True, verbose_name=_("Address"))
     bio = models.TextField(null=True, blank=True, verbose_name=_("Bio"))
     token_version = models.IntegerField(default=0, help_text=_("Used to invalidate all tokens"))
+    email_verified = models.BooleanField(default=False)
+    email_verification_token = models.UUIDField(default=uuid.uuid4, editable=False)
 
     class Meta:
         verbose_name = _("User")
@@ -31,3 +34,8 @@ class User(AbstractUser):
         self.token_version += 1
         self.save(update_fields=["token_version"])
         return self.token_version
+
+    def generate_verification_token(self):
+        self.email_verification_token = uuid.uuid4()
+        self.save()
+        return self.email_verification_token

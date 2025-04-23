@@ -7,6 +7,7 @@ from drf_spectacular.utils import (
     OpenApiExample,
     OpenApiResponse,
     OpenApiParameter,
+    inline_serializer,
 )
 from django.shortcuts import render
 from rest_framework import status, generics, permissions, viewsets
@@ -31,6 +32,9 @@ from .serializers import (
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 from .backends import CustomAccessToken
+from django.urls import reverse
+from apps.config.utils.email.services import EmailService
+from rest_framework import serializers
 
 User = get_user_model()
 
@@ -97,36 +101,60 @@ class RegisterView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
 
-        # Generate tokens
-        refresh = RefreshToken.for_user(user)
+        try:
+            user = serializer.save()
+            print(f"User created successfully: {user.email}")
 
-        # Add custom claims to the token
-        refresh["user_id"] = user.id
-        refresh["username"] = user.username
-        refresh["email"] = user.email
-        refresh["first_name"] = user.first_name
-        refresh["last_name"] = user.last_name
-        refresh["token_version"] = user.token_version
+            # Generate verification token
+            token = user.generate_verification_token()
+            print(f"Verification token generated: {token}")
 
-        # Create a custom access token
-        access_token = CustomAccessToken()
-        access_token["user_id"] = user.id
-        access_token["username"] = user.username
-        access_token["email"] = user.email
-        access_token["first_name"] = user.first_name
-        access_token["last_name"] = user.last_name
-        access_token["token_version"] = user.token_version
+            # Create verification URL
+            verify_url = request.build_absolute_uri(
+                reverse("authentication:verify-email", kwargs={"token": token})
+            )
+            print(f"Verification URL created: {verify_url}")
 
-        return Response(
-            {
-                "user": UserSerializer(user).data,
-                "refresh": str(refresh),
-                "access": str(access_token),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+            try:
+                # Send verification email
+                email_sent = EmailService.send_verification_email(user, verify_url)
+                print(f"Email sending status: {'Success' if email_sent else 'Failed'}")
+
+                if not email_sent:
+                    print("Email sending failed, but user was created")
+                    return Response(
+                        {
+                            "detail": "Account created but verification email failed to send. "
+                            "Please use the resend verification endpoint."
+                        },
+                        status=status.HTTP_201_CREATED,
+                    )
+
+            except Exception as e:
+                print(f"Error sending verification email: {str(e)}")
+                return Response(
+                    {
+                        "detail": "Account created but verification email failed to send. "
+                        "Please use the resend verification endpoint."
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
+
+            print(f"Registration completed successfully for: {user.email}")
+            return Response(
+                {
+                    "detail": "Registration successful. Please check your email to verify your account."
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as e:
+            print(f"Error during registration: {str(e)}")
+            return Response(
+                {"error": "Registration failed. Please try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 @extend_schema(
@@ -157,6 +185,12 @@ class LoginView(TokenObtainPairView):
         if not user:
             return Response(
                 {"error": _("Invalid credentials.")}, status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if not user.email_verified:
+            return Response(
+                {"error": _("Please verify your email address before logging in.")},
+                status=status.HTTP_401_UNAUTHORIZED,
             )
 
         if not user.is_active:
@@ -497,4 +531,188 @@ class TokenRefreshView(APIView):
         except (TokenError, InvalidToken, User.DoesNotExist):
             return Response(
                 {"error": _("Invalid refresh token.")}, status=status.HTTP_401_UNAUTHORIZED
+            )
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Verify email address",
+    description="Verify user's email address using the token sent via email",
+    responses={
+        200: OpenApiResponse(description="Email verified successfully"),
+        400: OpenApiResponse(description="Invalid or expired token"),
+    },
+)
+class VerifyEmailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, token):
+        try:
+            user = User.objects.get(email_verification_token=token)
+
+            if not user.email_verified:
+                print(f"Verifying email for user: {user.email}")
+                user.email_verified = True
+                user.save()
+
+                # Send welcome email
+                try:
+                    # Create login URL
+                    login_url = request.build_absolute_uri("/auth/login")
+
+                    # Send welcome email
+                    email_sent = EmailService.send_welcome_email(user=user, login_url=login_url)
+
+                    print(
+                        f"Welcome email sending status for {user.email}: {'Success' if email_sent else 'Failed'}"
+                    )
+
+                except Exception as e:
+                    print(f"Error sending welcome email to {user.email}: {str(e)}")
+
+                return Response(
+                    {"detail": "Email verified successfully. Welcome email has been sent."},
+                    status=status.HTTP_200_OK,
+                )
+
+            print(f"Email already verified for user: {user.email}")
+            return Response({"detail": "Email already verified."}, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            print(f"Invalid verification token: {token}")
+            return Response({"detail": "Invalid token."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# Add this serializer at the top with your other serializers
+class EmailRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(help_text="Email address to resend verification link")
+
+
+class ResendVerificationResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+
+
+class ResendVerificationErrorSerializer(serializers.Serializer):
+    error = serializers.CharField()
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Resend verification email",
+    description=(
+        "Request a new email verification link. If the email exists and is not verified, "
+        "a new verification link will be sent. For security reasons, the API returns a "
+        "success message regardless of whether the email exists or not."
+    ),
+    request=EmailRequestSerializer,
+    responses={
+        200: OpenApiResponse(
+            description="Request processed successfully",
+            response=ResendVerificationResponseSerializer,
+        ),
+        400: OpenApiResponse(description="Bad Request", response=ResendVerificationErrorSerializer),
+    },
+    examples=[
+        OpenApiExample(
+            "Valid Request",
+            summary="Example request with email",
+            description="Send verification email request",
+            value={"email": "user@example.com"},
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Success Response",
+            summary="Successful response",
+            description="Email sent or account not found",
+            value={
+                "detail": "If an account exists with this email, a verification link will be sent."
+            },
+            response_only=True,
+            status_codes=["200"],
+        ),
+        OpenApiExample(
+            "Already Verified Error",
+            summary="Email already verified",
+            description="Error when email is already verified",
+            value={"error": "Email is already verified."},
+            response_only=True,
+            status_codes=["400"],
+        ),
+        OpenApiExample(
+            "Missing Email Error",
+            summary="Missing email field",
+            description="Error when email is not provided",
+            value={"error": "Email is required."},
+            response_only=True,
+            status_codes=["400"],
+        ),
+    ],
+)
+class ResendVerificationEmailView(APIView):
+    """View for requesting a new verification email"""
+
+    permission_classes = [permissions.AllowAny]
+    serializer_class = EmailRequestSerializer
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        if not serializer.is_valid():
+            print(f"Email verification request failed: Invalid data - {serializer.errors}")
+            return Response({"error": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        email = serializer.validated_data["email"]
+        print(f"Processing email verification request for: {email}")
+
+        try:
+            user = User.objects.get(email=email)
+
+            # Check if email is already verified
+            if user.email_verified:
+                print(f"Email verification request failed: Email already verified - {email}")
+                return Response(
+                    {"error": "Email is already verified."}, status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Generate new verification token
+            token = user.generate_verification_token()
+            print(f"Generated new verification token for user: {user.username}")
+
+            # Create verification URL
+            verify_url = request.build_absolute_uri(
+                reverse("authentication:verify-email", kwargs={"token": token})
+            )
+            print(f"Verification URL generated: {verify_url}")
+
+            try:
+                # Send new verification email
+                email_sent = EmailService.send_verification_email(user, verify_url)
+
+                if email_sent:
+                    print(f"Verification email sent successfully to: {email}")
+                    return Response(
+                        {"detail": "Verification email sent successfully."},
+                        status=status.HTTP_200_OK,
+                    )
+                else:
+                    print(f"Failed to send verification email to: {email}")
+                    return Response(
+                        {"error": "Failed to send verification email. Please try again later."},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+            except Exception as e:
+                print(f"Error sending verification email to {email}: {str(e)}")
+                return Response(
+                    {"error": "Failed to send verification email. Please try again later."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        except User.DoesNotExist:
+            print(f"Email verification request: User not found - {email}")
+            # For security reasons, don't reveal if email exists
+            return Response(
+                {
+                    "detail": "If an account exists with this email, a verification link will be sent."
+                },
+                status=status.HTTP_200_OK,
             )

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <style>
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .header {
+            background-color: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .content {
+            padding: 20px;
+        }
+
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white !important;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="email-container">
+        <div class="header">
+            <h2>{{ subject }}</h2>
+        </div>
+        <div class="content">
+            {{ body|safe }}
+            {% if action_url %}
+            <div style="text-align: center;">
+                <a href="{{ action_url }}" class="button">{{ action_text|default:"Click Here" }}</a>
+            </div>
+            {% endif %}
+        </div>
+        <div class="footer">
+            <p>{{ footer_text|default:"This is an automated message, please do not reply." }}</p>
+        </div>
+    </div>
+</body>
+
+</html>
