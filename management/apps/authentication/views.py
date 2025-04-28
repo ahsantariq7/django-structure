@@ -28,6 +28,9 @@ from .serializers import (
     TokenVerifySerializer,
     TokenRefreshSerializer,
     LogoutSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetResponseSerializer,
 )
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
@@ -35,6 +38,7 @@ from .backends import CustomAccessToken
 from django.urls import reverse
 from apps.config.utils.email.services import EmailService
 from rest_framework import serializers
+import uuid
 
 User = get_user_model()
 
@@ -358,78 +362,218 @@ class PasswordChangeView(APIView):
     tags=["Authentication"],
     summary="Request password reset",
     description="Send password reset email to the provided email address",
-    request=OpenApiExample("Password Reset Request", value={"email": "john@example.com"}),
+    request=PasswordResetRequestSerializer,
     responses={
-        200: OpenApiResponse(description="OK - Password reset email sent"),
-        400: OpenApiResponse(description="Bad Request - Email is required"),
+        200: OpenApiResponse(
+            description="OK - Password reset email sent", 
+            response=PasswordResetResponseSerializer
+        ),
+        400: OpenApiResponse(
+            description="Bad Request - Email is required", 
+            response=PasswordResetResponseSerializer
+        ),
     },
+    examples=[
+        OpenApiExample(
+            "Valid Request",
+            summary="Password Reset Request",
+            description="Request with valid email",
+            value={"email": "user@example.com"},
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Success Response",
+            summary="Success",
+            description="Password reset email sent or user not found",
+            value={"message": "Password reset email has been sent."},
+            response_only=True,
+            status_codes=["200"],
+        ),
+    ],
 )
 class PasswordResetRequestView(APIView):
     """View for requesting password reset"""
 
     permission_classes = [permissions.AllowAny]
+    serializer_class = PasswordResetRequestSerializer
 
     def post(self, request):
-        email = request.data.get("email")
-        if not email:
+        serializer = self.serializer_class(data=request.data)
+        if not serializer.is_valid():
+            print(f"Password reset request failed: Invalid data - {serializer.errors}")
             return Response(
-                {"email": [_("Email is required.")]}, status=status.HTTP_400_BAD_REQUEST
+                {"message": _("Email is required.")}, 
+                status=status.HTTP_400_BAD_REQUEST
             )
 
+        email = serializer.validated_data["email"]
+        print(f"Processing password reset request for: {email}")
+
         try:
+            # Get user by email
             user = User.objects.get(email=email)
-            # Here you would typically:
-            # 1. Generate a password reset token
-            # 2. Send an email with the reset link
-            # 3. Store the token with an expiration time
-            return Response(
-                {"message": _("Password reset email has been sent.")}, status=status.HTTP_200_OK
+            
+            # Generate reset token
+            token = user.generate_password_reset_token()
+            print(f"Generated password reset token for user: {user.username}")
+
+            # Create reset URL
+            reset_url = request.build_absolute_uri(
+                reverse("authentication:password-reset-confirm-page") + f"?token={token}"
             )
+            print(f"Password reset URL generated: {reset_url}")
+
+            try:
+                # Send password reset email
+                email_sent = EmailService.send_password_reset_email(user, reset_url)
+
+                if not email_sent:
+                    print(f"Failed to send password reset email to: {email}")
+                    return Response(
+                        {"message": _("Failed to send password reset email. Please try again later.")},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                print(f"Password reset email sent successfully to: {email}")
+
+            except Exception as e:
+                print(f"Error sending password reset email to {email}: {str(e)}")
+                return Response(
+                    {"message": _("Failed to send password reset email. Please try again later.")},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
         except User.DoesNotExist:
-            return Response(
-                {"message": _("Password reset email has been sent.")}, status=status.HTTP_200_OK
-            )
+            print(f"Password reset request: User not found - {email}")
+            # We don't reveal if the user exists for security reasons
+
+        # For security reasons, always return the same response whether the email exists or not
+        return Response(
+            {"message": _("Password reset email has been sent.")}, 
+            status=status.HTTP_200_OK
+        )
 
 
 @extend_schema(
     tags=["Authentication"],
     summary="Confirm password reset",
     description="Reset password using the token received via email",
-    request=OpenApiExample(
-        "Password Reset Confirm",
-        value={"token": "reset_token_here", "new_password": "NewPassword123!"},
-    ),
+    request=PasswordResetConfirmSerializer,
     responses={
-        200: OpenApiResponse(description="OK - Password has been reset successfully"),
-        400: OpenApiResponse(description="Bad Request - Invalid token or missing data"),
+        200: OpenApiResponse(
+            description="OK - Password has been reset successfully", 
+            response=PasswordResetResponseSerializer
+        ),
+        400: OpenApiResponse(
+            description="Bad Request - Invalid token or missing data", 
+            response=PasswordResetResponseSerializer
+        ),
     },
+    examples=[
+        OpenApiExample(
+            "Valid Request",
+            summary="Password Reset Confirm",
+            description="Request with valid token and password",
+            value={
+                "token": "a1b2c3d4-e5f6-7890-abcd-1234567890ab",
+                "new_password": "NewSecurePassword123!",
+                "new_password_confirm": "NewSecurePassword123!"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Success Response",
+            summary="Success",
+            description="Password successfully reset",
+            value={"message": "Password has been reset successfully."},
+            response_only=True,
+            status_codes=["200"],
+        ),
+        OpenApiExample(
+            "Error Response",
+            summary="Invalid Token",
+            description="Token is invalid or expired",
+            value={"message": "Invalid or expired token."},
+            response_only=True,
+            status_codes=["400"],
+        ),
+    ],
 )
 class PasswordResetConfirmView(APIView):
     """View for confirming password reset"""
 
     permission_classes = [permissions.AllowAny]
+    serializer_class = PasswordResetConfirmSerializer
 
     def post(self, request):
-        token = request.data.get("token")
-        new_password = request.data.get("new_password")
-
-        if not token or not new_password:
+        serializer = self.serializer_class(data=request.data)
+        if not serializer.is_valid():
+            print(f"Password reset confirmation failed: Invalid data - {serializer.errors}")
             return Response(
-                {"message": _("Token and new password are required.")},
+                {"message": _("Invalid data. Please check the form and try again.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        token = serializer.validated_data["token"]
+        new_password = serializer.validated_data["new_password"]
+
         try:
-            # Here you would typically:
-            # 1. Validate the token
-            # 2. Get the user associated with the token
-            # 3. Set the new password
+            # Convert string token to UUID
+            try:
+                token_uuid = uuid.UUID(token)
+            except ValueError:
+                return Response(
+                    {"message": _("Invalid token format.")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Find user with this token
+            user = User.objects.get(password_reset_token=token_uuid)
+            
+            # Validate token
+            if not user.is_password_reset_token_valid(token_uuid):
+                return Response(
+                    {"message": _("Invalid or expired token. Please request a new password reset.")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Set new password
+            user.set_password(new_password)
+            
+            # Clear reset token
+            user.clear_password_reset_token()
+            
+            # Force logout from all devices by incrementing token version
+            user.increment_token_version()
+            
+            # Save user
+            user.save()
+            
+            print(f"Password reset successful for user: {user.username}")
+            
+            # Send password changed notification email
+            try:
+                EmailService.send_password_changed_notification(user)
+            except Exception as e:
+                print(f"Error sending password changed notification: {str(e)}")
+                # We continue even if notification fails
+
             return Response(
-                {"message": _("Password has been reset successfully.")}, status=status.HTTP_200_OK
+                {"message": _("Password has been reset successfully. You can now log in with your new password.")},
+                status=status.HTTP_200_OK,
             )
-        except ValidationError:
+            
+        except User.DoesNotExist:
+            print(f"Password reset failed: No user found with token {token}")
             return Response(
-                {"message": _("Invalid or expired token.")}, status=status.HTTP_400_BAD_REQUEST
+                {"message": _("Invalid or expired token. Please request a new password reset.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            print(f"Password reset error: {str(e)}")
+            return Response(
+                {"message": _("An error occurred. Please try again later.")},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
@@ -716,3 +860,24 @@ class ResendVerificationEmailView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+
+
+class PasswordResetConfirmPageView(APIView):
+    """View for password reset confirmation page"""
+    
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request):
+        token = request.GET.get('token')
+        if not token:
+            return Response(
+                {"error": "Missing token parameter"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Render a page with a form to reset the password
+        context = {
+            'token': token,
+            'reset_endpoint': reverse('authentication:password_reset_confirm')
+        }
+        return render(request, 'authentication/password_reset_confirm.html', context)

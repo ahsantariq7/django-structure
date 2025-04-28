@@ -28,6 +28,11 @@ urlpatterns = [
         views.PasswordResetConfirmView.as_view(),
         name="password_reset_confirm",
     ),
+    path(
+        "password/reset/page/",
+        views.PasswordResetConfirmPageView.as_view(),
+        name="password-reset-confirm-page",
+    ),
     # Include router URLs
     path("", include(router.urls)),
     # Swagger URLs

@@ -102,29 +102,35 @@ class EmailService:
 
     @classmethod
     def send_password_reset_email(cls, user, reset_url):
-        """
-        Send password reset link
-
-        Args:
-            user: User instance
-            reset_url: URL for password reset
-        """
-        template_config = cls._get_template_config("password_reset")
-        subject = template_config.get("subject", "Reset Your Password")
-
+        """Send password reset email with reset link"""
+        subject = "Reset Your Password"
         body = f"""
-        <p>Hello {user.get_full_name() or user.username},</p>
-        <p>We received a request to reset your password.</p>
-        <p>Click the button below to reset your password:</p>
+        <p>Hello {user.first_name or user.username},</p>
+        <p>We received a request to reset your password. Click the button below to create a new password:</p>
+        <p>This link will expire in 24 hours.</p>
+        <p>If you didn't request a password reset, you can ignore this email.</p>
         """
-
         return cls.send_email(
             to_email=user.email,
             subject=subject,
             body=body,
             action_url=reset_url,
-            action_text="Reset Password",
-            footer_text="If you didn't request this, please ignore this email.",
+            action_text="Reset Password"
+        )
+
+    @classmethod
+    def send_password_changed_notification(cls, user):
+        """Send notification that password was changed"""
+        subject = "Your Password Has Been Changed"
+        body = f"""
+        <p>Hello {user.first_name or user.username},</p>
+        <p>Your password has been successfully changed.</p>
+        <p>If you did not make this change, please contact our support team immediately.</p>
+        """
+        return cls.send_email(
+            to_email=user.email,
+            subject=subject,
+            body=body
         )
 
     @classmethod
