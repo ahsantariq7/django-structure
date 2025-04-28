@@ -405,3 +405,42 @@ class LogoutSerializer(serializers.Serializer):
         if not refresh:
             raise serializers.ValidationError(_("Refresh token is required."))
         return attrs
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """Serializer for requesting a password reset"""
+    email = serializers.EmailField(required=True, help_text="Email address for password reset")
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """Serializer for confirming a password reset"""
+    token = serializers.CharField(required=True, help_text="Password reset token received via email")
+    new_password = serializers.CharField(
+        required=True, 
+        help_text="New password",
+        style={'input_type': 'password'}
+    )
+    new_password_confirm = serializers.CharField(
+        required=True, 
+        help_text="Confirm new password",
+        style={'input_type': 'password'}
+    )
+    
+    def validate(self, attrs):
+        """Validate new password"""
+        if attrs["new_password"] != attrs["new_password_confirm"]:
+            raise serializers.ValidationError(
+                {"new_password_confirm": _("Password fields didn't match.")}
+            )
+
+        try:
+            validate_password(attrs["new_password"])
+        except ValidationError as e:
+            raise serializers.ValidationError({"new_password": list(e.messages)})
+
+        return attrs
+
+
+class PasswordResetResponseSerializer(serializers.Serializer):
+    """Serializer for password reset response"""
+    message = serializers.CharField()

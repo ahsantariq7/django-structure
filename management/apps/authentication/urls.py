@@ -28,6 +28,11 @@ urlpatterns = [
         views.PasswordResetConfirmView.as_view(),
         name="password_reset_confirm",
     ),
+    path(
+        "password/reset/page/",
+        views.PasswordResetConfirmPageView.as_view(),
+        name="password-reset-confirm-page",
+    ),
     # Include router URLs
     path("", include(router.urls)),
     # Swagger URLs
@@ -36,4 +41,10 @@ urlpatterns = [
         "docs/", SpectacularSwaggerView.as_view(url_name="authentication:schema"), name="swagger-ui"
     ),
     path("redoc/", SpectacularRedocView.as_view(url_name="authentication:schema"), name="redoc"),
+    path("verify-email/<uuid:token>/", views.VerifyEmailView.as_view(), name="verify-email"),
+    path(
+        "resend-verification/",
+        views.ResendVerificationEmailView.as_view(),
+        name="resend-verification",
+    ),
 ]

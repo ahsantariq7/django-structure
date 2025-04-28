@@ -7,6 +7,7 @@ from drf_spectacular.utils import (
     OpenApiExample,
     OpenApiResponse,
     OpenApiParameter,
+    inline_serializer,
 )
 from django.shortcuts import render
 from rest_framework import status, generics, permissions, viewsets
@@ -27,10 +28,17 @@ from .serializers import (
     TokenVerifySerializer,
     TokenRefreshSerializer,
     LogoutSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetResponseSerializer,
 )
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 from .backends import CustomAccessToken
+from django.urls import reverse
+from apps.config.utils.email.services import EmailService
+from rest_framework import serializers
+import uuid
 
 User = get_user_model()
 
@@ -97,36 +105,60 @@ class RegisterView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
 
-        # Generate tokens
-        refresh = RefreshToken.for_user(user)
+        try:
+            user = serializer.save()
+            print(f"User created successfully: {user.email}")
 
-        # Add custom claims to the token
-        refresh["user_id"] = user.id
-        refresh["username"] = user.username
-        refresh["email"] = user.email
-        refresh["first_name"] = user.first_name
-        refresh["last_name"] = user.last_name
-        refresh["token_version"] = user.token_version
+            # Generate verification token
+            token = user.generate_verification_token()
+            print(f"Verification token generated: {token}")
 
-        # Create a custom access token
-        access_token = CustomAccessToken()
-        access_token["user_id"] = user.id
-        access_token["username"] = user.username
-        access_token["email"] = user.email
-        access_token["first_name"] = user.first_name
-        access_token["last_name"] = user.last_name
-        access_token["token_version"] = user.token_version
+            # Create verification URL
+            verify_url = request.build_absolute_uri(
+                reverse("authentication:verify-email", kwargs={"token": token})
+            )
+            print(f"Verification URL created: {verify_url}")
 
-        return Response(
-            {
-                "user": UserSerializer(user).data,
-                "refresh": str(refresh),
-                "access": str(access_token),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+            try:
+                # Send verification email
+                email_sent = EmailService.send_verification_email(user, verify_url)
+                print(f"Email sending status: {'Success' if email_sent else 'Failed'}")
+
+                if not email_sent:
+                    print("Email sending failed, but user was created")
+                    return Response(
+                        {
+                            "detail": "Account created but verification email failed to send. "
+                            "Please use the resend verification endpoint."
+                        },
+                        status=status.HTTP_201_CREATED,
+                    )
+
+            except Exception as e:
+                print(f"Error sending verification email: {str(e)}")
+                return Response(
+                    {
+                        "detail": "Account created but verification email failed to send. "
+                        "Please use the resend verification endpoint."
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
+
+            print(f"Registration completed successfully for: {user.email}")
+            return Response(
+                {
+                    "detail": "Registration successful. Please check your email to verify your account."
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as e:
+            print(f"Error during registration: {str(e)}")
+            return Response(
+                {"error": "Registration failed. Please try again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 @extend_schema(
@@ -157,6 +189,12 @@ class LoginView(TokenObtainPairView):
         if not user:
             return Response(
                 {"error": _("Invalid credentials.")}, status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if not user.email_verified:
+            return Response(
+                {"error": _("Please verify your email address before logging in.")},
+                status=status.HTTP_401_UNAUTHORIZED,
             )
 
         if not user.is_active:
@@ -324,78 +362,218 @@ class PasswordChangeView(APIView):
     tags=["Authentication"],
     summary="Request password reset",
     description="Send password reset email to the provided email address",
-    request=OpenApiExample("Password Reset Request", value={"email": "john@example.com"}),
+    request=PasswordResetRequestSerializer,
     responses={
-        200: OpenApiResponse(description="OK - Password reset email sent"),
-        400: OpenApiResponse(description="Bad Request - Email is required"),
+        200: OpenApiResponse(
+            description="OK - Password reset email sent", 
+            response=PasswordResetResponseSerializer
+        ),
+        400: OpenApiResponse(
+            description="Bad Request - Email is required", 
+            response=PasswordResetResponseSerializer
+        ),
     },
+    examples=[
+        OpenApiExample(
+            "Valid Request",
+            summary="Password Reset Request",
+            description="Request with valid email",
+            value={"email": "user@example.com"},
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Success Response",
+            summary="Success",
+            description="Password reset email sent or user not found",
+            value={"message": "Password reset email has been sent."},
+            response_only=True,
+            status_codes=["200"],
+        ),
+    ],
 )
 class PasswordResetRequestView(APIView):
     """View for requesting password reset"""
 
     permission_classes = [permissions.AllowAny]
+    serializer_class = PasswordResetRequestSerializer
 
     def post(self, request):
-        email = request.data.get("email")
-        if not email:
+        serializer = self.serializer_class(data=request.data)
+        if not serializer.is_valid():
+            print(f"Password reset request failed: Invalid data - {serializer.errors}")
             return Response(
-                {"email": [_("Email is required.")]}, status=status.HTTP_400_BAD_REQUEST
+                {"message": _("Email is required.")}, 
+                status=status.HTTP_400_BAD_REQUEST
             )
 
+        email = serializer.validated_data["email"]
+        print(f"Processing password reset request for: {email}")
+
         try:
+            # Get user by email
             user = User.objects.get(email=email)
-            # Here you would typically:
-            # 1. Generate a password reset token
-            # 2. Send an email with the reset link
-            # 3. Store the token with an expiration time
-            return Response(
-                {"message": _("Password reset email has been sent.")}, status=status.HTTP_200_OK
+            
+            # Generate reset token
+            token = user.generate_password_reset_token()
+            print(f"Generated password reset token for user: {user.username}")
+
+            # Create reset URL
+            reset_url = request.build_absolute_uri(
+                reverse("authentication:password-reset-confirm-page") + f"?token={token}"
             )
+            print(f"Password reset URL generated: {reset_url}")
+
+            try:
+                # Send password reset email
+                email_sent = EmailService.send_password_reset_email(user, reset_url)
+
+                if not email_sent:
+                    print(f"Failed to send password reset email to: {email}")
+                    return Response(
+                        {"message": _("Failed to send password reset email. Please try again later.")},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                print(f"Password reset email sent successfully to: {email}")
+
+            except Exception as e:
+                print(f"Error sending password reset email to {email}: {str(e)}")
+                return Response(
+                    {"message": _("Failed to send password reset email. Please try again later.")},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
         except User.DoesNotExist:
-            return Response(
-                {"message": _("Password reset email has been sent.")}, status=status.HTTP_200_OK
-            )
+            print(f"Password reset request: User not found - {email}")
+            # We don't reveal if the user exists for security reasons
+
+        # For security reasons, always return the same response whether the email exists or not
+        return Response(
+            {"message": _("Password reset email has been sent.")}, 
+            status=status.HTTP_200_OK
+        )
 
 
 @extend_schema(
     tags=["Authentication"],
     summary="Confirm password reset",
     description="Reset password using the token received via email",
-    request=OpenApiExample(
-        "Password Reset Confirm",
-        value={"token": "reset_token_here", "new_password": "NewPassword123!"},
-    ),
+    request=PasswordResetConfirmSerializer,
     responses={
-        200: OpenApiResponse(description="OK - Password has been reset successfully"),
-        400: OpenApiResponse(description="Bad Request - Invalid token or missing data"),
+        200: OpenApiResponse(
+            description="OK - Password has been reset successfully", 
+            response=PasswordResetResponseSerializer
+        ),
+        400: OpenApiResponse(
+            description="Bad Request - Invalid token or missing data", 
+            response=PasswordResetResponseSerializer
+        ),
     },
+    examples=[
+        OpenApiExample(
+            "Valid Request",
+            summary="Password Reset Confirm",
+            description="Request with valid token and password",
+            value={
+                "token": "a1b2c3d4-e5f6-7890-abcd-1234567890ab",
+                "new_password": "NewSecurePassword123!",
+                "new_password_confirm": "NewSecurePassword123!"
+            },
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Success Response",
+            summary="Success",
+            description="Password successfully reset",
+            value={"message": "Password has been reset successfully."},
+            response_only=True,
+            status_codes=["200"],
+        ),
+        OpenApiExample(
+            "Error Response",
+            summary="Invalid Token",
+            description="Token is invalid or expired",
+            value={"message": "Invalid or expired token."},
+            response_only=True,
+            status_codes=["400"],
+        ),
+    ],
 )
 class PasswordResetConfirmView(APIView):
     """View for confirming password reset"""
 
     permission_classes = [permissions.AllowAny]
+    serializer_class = PasswordResetConfirmSerializer
 
     def post(self, request):
-        token = request.data.get("token")
-        new_password = request.data.get("new_password")
-
-        if not token or not new_password:
+        serializer = self.serializer_class(data=request.data)
+        if not serializer.is_valid():
+            print(f"Password reset confirmation failed: Invalid data - {serializer.errors}")
             return Response(
-                {"message": _("Token and new password are required.")},
+                {"message": _("Invalid data. Please check the form and try again.")},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        token = serializer.validated_data["token"]
+        new_password = serializer.validated_data["new_password"]
+
         try:
-            # Here you would typically:
-            # 1. Validate the token
-            # 2. Get the user associated with the token
-            # 3. Set the new password
+            # Convert string token to UUID
+            try:
+                token_uuid = uuid.UUID(token)
+            except ValueError:
+                return Response(
+                    {"message": _("Invalid token format.")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Find user with this token
+            user = User.objects.get(password_reset_token=token_uuid)
+            
+            # Validate token
+            if not user.is_password_reset_token_valid(token_uuid):
+                return Response(
+                    {"message": _("Invalid or expired token. Please request a new password reset.")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Set new password
+            user.set_password(new_password)
+            
+            # Clear reset token
+            user.clear_password_reset_token()
+            
+            # Force logout from all devices by incrementing token version
+            user.increment_token_version()
+            
+            # Save user
+            user.save()
+            
+            print(f"Password reset successful for user: {user.username}")
+            
+            # Send password changed notification email
+            try:
+                EmailService.send_password_changed_notification(user)
+            except Exception as e:
+                print(f"Error sending password changed notification: {str(e)}")
+                # We continue even if notification fails
+
             return Response(
-                {"message": _("Password has been reset successfully.")}, status=status.HTTP_200_OK
+                {"message": _("Password has been reset successfully. You can now log in with your new password.")},
+                status=status.HTTP_200_OK,
             )
-        except ValidationError:
+            
+        except User.DoesNotExist:
+            print(f"Password reset failed: No user found with token {token}")
             return Response(
-                {"message": _("Invalid or expired token.")}, status=status.HTTP_400_BAD_REQUEST
+                {"message": _("Invalid or expired token. Please request a new password reset.")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            print(f"Password reset error: {str(e)}")
+            return Response(
+                {"message": _("An error occurred. Please try again later.")},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
@@ -498,3 +676,208 @@ class TokenRefreshView(APIView):
             return Response(
                 {"error": _("Invalid refresh token.")}, status=status.HTTP_401_UNAUTHORIZED
             )
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Verify email address",
+    description="Verify user's email address using the token sent via email",
+    responses={
+        200: OpenApiResponse(description="Email verified successfully"),
+        400: OpenApiResponse(description="Invalid or expired token"),
+    },
+)
+class VerifyEmailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, token):
+        try:
+            user = User.objects.get(email_verification_token=token)
+
+            if not user.email_verified:
+                print(f"Verifying email for user: {user.email}")
+                user.email_verified = True
+                user.save()
+
+                # Send welcome email
+                try:
+                    # Create login URL
+                    login_url = request.build_absolute_uri("/auth/login")
+
+                    # Send welcome email
+                    email_sent = EmailService.send_welcome_email(user=user, login_url=login_url)
+
+                    print(
+                        f"Welcome email sending status for {user.email}: {'Success' if email_sent else 'Failed'}"
+                    )
+
+                except Exception as e:
+                    print(f"Error sending welcome email to {user.email}: {str(e)}")
+
+                return Response(
+                    {"detail": "Email verified successfully. Welcome email has been sent."},
+                    status=status.HTTP_200_OK,
+                )
+
+            print(f"Email already verified for user: {user.email}")
+            return Response({"detail": "Email already verified."}, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            print(f"Invalid verification token: {token}")
+            return Response({"detail": "Invalid token."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# Add this serializer at the top with your other serializers
+class EmailRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(help_text="Email address to resend verification link")
+
+
+class ResendVerificationResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+
+
+class ResendVerificationErrorSerializer(serializers.Serializer):
+    error = serializers.CharField()
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Resend verification email",
+    description=(
+        "Request a new email verification link. If the email exists and is not verified, "
+        "a new verification link will be sent. For security reasons, the API returns a "
+        "success message regardless of whether the email exists or not."
+    ),
+    request=EmailRequestSerializer,
+    responses={
+        200: OpenApiResponse(
+            description="Request processed successfully",
+            response=ResendVerificationResponseSerializer,
+        ),
+        400: OpenApiResponse(description="Bad Request", response=ResendVerificationErrorSerializer),
+    },
+    examples=[
+        OpenApiExample(
+            "Valid Request",
+            summary="Example request with email",
+            description="Send verification email request",
+            value={"email": "user@example.com"},
+            request_only=True,
+        ),
+        OpenApiExample(
+            "Success Response",
+            summary="Successful response",
+            description="Email sent or account not found",
+            value={
+                "detail": "If an account exists with this email, a verification link will be sent."
+            },
+            response_only=True,
+            status_codes=["200"],
+        ),
+        OpenApiExample(
+            "Already Verified Error",
+            summary="Email already verified",
+            description="Error when email is already verified",
+            value={"error": "Email is already verified."},
+            response_only=True,
+            status_codes=["400"],
+        ),
+        OpenApiExample(
+            "Missing Email Error",
+            summary="Missing email field",
+            description="Error when email is not provided",
+            value={"error": "Email is required."},
+            response_only=True,
+            status_codes=["400"],
+        ),
+    ],
+)
+class ResendVerificationEmailView(APIView):
+    """View for requesting a new verification email"""
+
+    permission_classes = [permissions.AllowAny]
+    serializer_class = EmailRequestSerializer
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        if not serializer.is_valid():
+            print(f"Email verification request failed: Invalid data - {serializer.errors}")
+            return Response({"error": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        email = serializer.validated_data["email"]
+        print(f"Processing email verification request for: {email}")
+
+        try:
+            user = User.objects.get(email=email)
+
+            # Check if email is already verified
+            if user.email_verified:
+                print(f"Email verification request failed: Email already verified - {email}")
+                return Response(
+                    {"error": "Email is already verified."}, status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Generate new verification token
+            token = user.generate_verification_token()
+            print(f"Generated new verification token for user: {user.username}")
+
+            # Create verification URL
+            verify_url = request.build_absolute_uri(
+                reverse("authentication:verify-email", kwargs={"token": token})
+            )
+            print(f"Verification URL generated: {verify_url}")
+
+            try:
+                # Send new verification email
+                email_sent = EmailService.send_verification_email(user, verify_url)
+
+                if email_sent:
+                    print(f"Verification email sent successfully to: {email}")
+                    return Response(
+                        {"detail": "Verification email sent successfully."},
+                        status=status.HTTP_200_OK,
+                    )
+                else:
+                    print(f"Failed to send verification email to: {email}")
+                    return Response(
+                        {"error": "Failed to send verification email. Please try again later."},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+            except Exception as e:
+                print(f"Error sending verification email to {email}: {str(e)}")
+                return Response(
+                    {"error": "Failed to send verification email. Please try again later."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        except User.DoesNotExist:
+            print(f"Email verification request: User not found - {email}")
+            # For security reasons, don't reveal if email exists
+            return Response(
+                {
+                    "detail": "If an account exists with this email, a verification link will be sent."
+                },
+                status=status.HTTP_200_OK,
+            )
+
+
+class PasswordResetConfirmPageView(APIView):
+    """View for password reset confirmation page"""
+    
+    permission_classes = [permissions.AllowAny]
+    
+    def get(self, request):
+        token = request.GET.get('token')
+        if not token:
+            return Response(
+                {"error": "Missing token parameter"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Render a page with a form to reset the password
+        context = {
+            'token': token,
+            'reset_endpoint': reverse('authentication:password_reset_confirm')
+        }
+        return render(request, 'authentication/password_reset_confirm.html', context)
