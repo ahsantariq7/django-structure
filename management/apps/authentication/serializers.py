@@ -409,23 +409,23 @@ class LogoutSerializer(serializers.Serializer):
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     """Serializer for requesting a password reset"""
+
     email = serializers.EmailField(required=True, help_text="Email address for password reset")
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
     """Serializer for confirming a password reset"""
-    token = serializers.CharField(required=True, help_text="Password reset token received via email")
+
+    token = serializers.CharField(
+        required=True, help_text="Password reset token received via email"
+    )
     new_password = serializers.CharField(
-        required=True, 
-        help_text="New password",
-        style={'input_type': 'password'}
+        required=True, help_text="New password", style={"input_type": "password"}
     )
     new_password_confirm = serializers.CharField(
-        required=True, 
-        help_text="Confirm new password",
-        style={'input_type': 'password'}
+        required=True, help_text="Confirm new password", style={"input_type": "password"}
     )
-    
+
     def validate(self, attrs):
         """Validate new password"""
         if attrs["new_password"] != attrs["new_password_confirm"]:
@@ -443,4 +443,44 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 class PasswordResetResponseSerializer(serializers.Serializer):
     """Serializer for password reset response"""
+
     message = serializers.CharField()
+
+
+class GoogleLoginSerializer(serializers.Serializer):
+    """Serializer for Google OAuth login"""
+
+    token = serializers.CharField(required=True, help_text="Google OAuth token")
+    email = serializers.EmailField(required=True, help_text="Email from Google account")
+    first_name = serializers.CharField(required=False, help_text="First name from Google account")
+    last_name = serializers.CharField(required=False, help_text="Last name from Google account")
+    profile_picture = serializers.URLField(
+        required=False, help_text="Profile picture URL from Google account"
+    )
+
+    def validate(self, attrs):
+        """Validate the Google login data"""
+        # Check if user exists with this email
+        try:
+            user = User.objects.get(email=attrs["email"])
+            # If user exists but is not active, raise error
+            if not user.is_active:
+                raise serializers.ValidationError(_("User account is disabled."))
+        except User.DoesNotExist:
+            # User doesn't exist, which is fine - we'll create them
+            pass
+
+        return attrs
+
+
+class GoogleAuthURLSerializer(serializers.Serializer):
+    """Serializer for Google OAuth URL response"""
+
+    auth_url = serializers.URLField(help_text="Google OAuth URL for authentication")
+
+
+class GoogleAuthCallbackSerializer(serializers.Serializer):
+    """Serializer for Google OAuth callback"""
+
+    code = serializers.CharField(required=True, help_text="Authorization code from Google")
+    state = serializers.CharField(required=False, help_text="State parameter for CSRF protection")

@@ -47,4 +47,7 @@ urlpatterns = [
         views.ResendVerificationEmailView.as_view(),
         name="resend-verification",
     ),
+    path("google-login/", views.GoogleLoginView.as_view(), name="google-login"),
+    path("google-auth-url/", views.GoogleAuthURLView.as_view(), name="google-auth-url"),
+    path("google-callback/", views.GoogleAuthCallbackView.as_view(), name="google-callback"),
 ]

@@ -43,3 +43,8 @@ MIDDLEWARE = [m for m in MIDDLEWARE if "CsrfViewMiddleware" not in m]  # noqa
 
 # Use normal logging in development (not the minimal version)
 # This will use the configuration from components/logging.py
+
+# Add Google OAuth credentials
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")

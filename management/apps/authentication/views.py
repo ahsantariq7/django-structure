@@ -6,8 +6,6 @@ from drf_spectacular.utils import (
     extend_schema,
     OpenApiExample,
     OpenApiResponse,
-    OpenApiParameter,
-    inline_serializer,
 )
 from django.shortcuts import render
 from rest_framework import status, generics, permissions, viewsets
@@ -31,6 +29,9 @@ from .serializers import (
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetResponseSerializer,
+    GoogleLoginSerializer,
+    GoogleAuthURLSerializer,
+    GoogleAuthCallbackSerializer,
 )
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
@@ -39,6 +40,8 @@ from django.urls import reverse
 from apps.config.utils.email.services import EmailService
 from rest_framework import serializers
 import uuid
+import requests
+from django.conf import settings
 
 User = get_user_model()
 
@@ -365,12 +368,10 @@ class PasswordChangeView(APIView):
     request=PasswordResetRequestSerializer,
     responses={
         200: OpenApiResponse(
-            description="OK - Password reset email sent", 
-            response=PasswordResetResponseSerializer
+            description="OK - Password reset email sent", response=PasswordResetResponseSerializer
         ),
         400: OpenApiResponse(
-            description="Bad Request - Email is required", 
-            response=PasswordResetResponseSerializer
+            description="Bad Request - Email is required", response=PasswordResetResponseSerializer
         ),
     },
     examples=[
@@ -402,8 +403,7 @@ class PasswordResetRequestView(APIView):
         if not serializer.is_valid():
             print(f"Password reset request failed: Invalid data - {serializer.errors}")
             return Response(
-                {"message": _("Email is required.")}, 
-                status=status.HTTP_400_BAD_REQUEST
+                {"message": _("Email is required.")}, status=status.HTTP_400_BAD_REQUEST
             )
 
         email = serializer.validated_data["email"]
@@ -412,7 +412,7 @@ class PasswordResetRequestView(APIView):
         try:
             # Get user by email
             user = User.objects.get(email=email)
-            
+
             # Generate reset token
             token = user.generate_password_reset_token()
             print(f"Generated password reset token for user: {user.username}")
@@ -430,7 +430,11 @@ class PasswordResetRequestView(APIView):
                 if not email_sent:
                     print(f"Failed to send password reset email to: {email}")
                     return Response(
-                        {"message": _("Failed to send password reset email. Please try again later.")},
+                        {
+                            "message": _(
+                                "Failed to send password reset email. Please try again later."
+                            )
+                        },
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
 
@@ -449,8 +453,7 @@ class PasswordResetRequestView(APIView):
 
         # For security reasons, always return the same response whether the email exists or not
         return Response(
-            {"message": _("Password reset email has been sent.")}, 
-            status=status.HTTP_200_OK
+            {"message": _("Password reset email has been sent.")}, status=status.HTTP_200_OK
         )
 
 
@@ -461,12 +464,12 @@ class PasswordResetRequestView(APIView):
     request=PasswordResetConfirmSerializer,
     responses={
         200: OpenApiResponse(
-            description="OK - Password has been reset successfully", 
-            response=PasswordResetResponseSerializer
+            description="OK - Password has been reset successfully",
+            response=PasswordResetResponseSerializer,
         ),
         400: OpenApiResponse(
-            description="Bad Request - Invalid token or missing data", 
-            response=PasswordResetResponseSerializer
+            description="Bad Request - Invalid token or missing data",
+            response=PasswordResetResponseSerializer,
         ),
     },
     examples=[
@@ -477,7 +480,7 @@ class PasswordResetRequestView(APIView):
             value={
                 "token": "a1b2c3d4-e5f6-7890-abcd-1234567890ab",
                 "new_password": "NewSecurePassword123!",
-                "new_password_confirm": "NewSecurePassword123!"
+                "new_password_confirm": "NewSecurePassword123!",
             },
             request_only=True,
         ),
@@ -529,28 +532,32 @@ class PasswordResetConfirmView(APIView):
 
             # Find user with this token
             user = User.objects.get(password_reset_token=token_uuid)
-            
+
             # Validate token
             if not user.is_password_reset_token_valid(token_uuid):
                 return Response(
-                    {"message": _("Invalid or expired token. Please request a new password reset.")},
+                    {
+                        "message": _(
+                            "Invalid or expired token. Please request a new password reset."
+                        )
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
             # Set new password
             user.set_password(new_password)
-            
+
             # Clear reset token
             user.clear_password_reset_token()
-            
+
             # Force logout from all devices by incrementing token version
             user.increment_token_version()
-            
+
             # Save user
             user.save()
-            
+
             print(f"Password reset successful for user: {user.username}")
-            
+
             # Send password changed notification email
             try:
                 EmailService.send_password_changed_notification(user)
@@ -559,10 +566,14 @@ class PasswordResetConfirmView(APIView):
                 # We continue even if notification fails
 
             return Response(
-                {"message": _("Password has been reset successfully. You can now log in with your new password.")},
+                {
+                    "message": _(
+                        "Password has been reset successfully. You can now log in with your new password."
+                    )
+                },
                 status=status.HTTP_200_OK,
             )
-            
+
         except User.DoesNotExist:
             print(f"Password reset failed: No user found with token {token}")
             return Response(
@@ -864,20 +875,283 @@ class ResendVerificationEmailView(APIView):
 
 class PasswordResetConfirmPageView(APIView):
     """View for password reset confirmation page"""
-    
+
     permission_classes = [permissions.AllowAny]
-    
+
     def get(self, request):
-        token = request.GET.get('token')
+        token = request.GET.get("token")
         if not token:
             return Response(
-                {"error": "Missing token parameter"},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "Missing token parameter"}, status=status.HTTP_400_BAD_REQUEST
             )
-            
+
         # Render a page with a form to reset the password
         context = {
-            'token': token,
-            'reset_endpoint': reverse('authentication:password_reset_confirm')
+            "token": token,
+            "reset_endpoint": reverse("authentication:password_reset_confirm"),
         }
-        return render(request, 'authentication/password_reset_confirm.html', context)
+        return render(request, "authentication/password_reset_confirm.html", context)
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Login with Google",
+    description="Authenticate user with Google OAuth token and return JWT tokens",
+    request=GoogleLoginSerializer,
+    responses={
+        200: TokenResponseSerializer,
+        400: OpenApiResponse(description="Bad Request - Invalid data provided"),
+        401: OpenApiResponse(description="Unauthorized - Invalid Google token"),
+    },
+)
+class GoogleLoginView(APIView):
+    """View for handling Google OAuth login"""
+
+    permission_classes = [permissions.AllowAny]
+    serializer_class = GoogleLoginSerializer
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        email = serializer.validated_data["email"]
+        first_name = serializer.validated_data.get("first_name", "")
+        last_name = serializer.validated_data.get("last_name", "")
+        profile_picture = serializer.validated_data.get("profile_picture")
+
+        try:
+            # Try to get existing user
+            user = User.objects.get(email=email)
+
+            # Update user info if needed
+            if first_name and not user.first_name:
+                user.first_name = first_name
+            if last_name and not user.last_name:
+                user.last_name = last_name
+            if profile_picture and not user.profile_picture:
+                user.profile_picture = profile_picture
+            user.save()
+
+        except User.DoesNotExist:
+            # Create new user
+            username = email.split("@")[0]  # Use email prefix as username
+            base_username = username
+            counter = 1
+
+            # Ensure username is unique
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            user = User.objects.create(
+                username=username,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                profile_picture=profile_picture,
+                email_verified=True,  # Google emails are pre-verified
+            )
+            user.set_unusable_password()  # User can't login with password
+            user.save()
+
+        # Generate tokens
+        refresh = RefreshToken.for_user(user)
+        access = CustomAccessToken.for_user(user)
+
+        return Response(
+            {"access": str(access), "refresh": str(refresh), "user": UserSerializer(user).data}
+        )
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Get Google OAuth URL",
+    description="Get the Google OAuth URL for authentication",
+    responses={
+        200: GoogleAuthURLSerializer,
+    },
+)
+class GoogleAuthURLView(APIView):
+    """View for getting Google OAuth URL"""
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        # Google OAuth configuration
+        client_id = settings.GOOGLE_CLIENT_ID
+        redirect_uri = request.build_absolute_uri(reverse("authentication:google-callback"))
+
+        # Generate state parameter for CSRF protection
+        state = str(uuid.uuid4())
+        request.session["oauth_state"] = state
+
+        # Construct Google OAuth URL
+        auth_url = (
+            f"https://accounts.google.com/o/oauth2/v2/auth?"
+            f"client_id={client_id}&"
+            f"redirect_uri={redirect_uri}&"
+            f"response_type=code&"
+            f"scope=email profile&"
+            f"state={state}&"
+            f"access_type=offline&"
+            f"prompt=consent"
+        )
+
+        return Response({"auth_url": auth_url})
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Handle Google OAuth callback",
+    description="Process the Google OAuth callback and authenticate user",
+    request=GoogleAuthCallbackSerializer,
+    responses={
+        200: TokenResponseSerializer,
+        400: OpenApiResponse(description="Bad Request - Invalid data provided"),
+        401: OpenApiResponse(description="Unauthorized - Invalid Google token"),
+    },
+)
+class GoogleAuthCallbackView(APIView):
+    """View for handling Google OAuth callback"""
+
+    permission_classes = [permissions.AllowAny]
+    serializer_class = GoogleAuthCallbackSerializer
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # Get and decode the authorization code
+        code = serializer.validated_data["code"]
+        try:
+            # URL decode the code
+            from urllib.parse import unquote
+
+            code = unquote(code)
+            print(f"Decoded Code: {code}")
+        except Exception as e:
+            print(f"Error decoding code: {str(e)}")
+            return Response(
+                {"error": "Invalid authorization code format"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        state = serializer.validated_data.get("state")
+        print(f"State: {state}")
+
+        # Verify state parameter for CSRF protection
+        stored_state = request.session.get("oauth_state")
+        if not stored_state or state != stored_state:
+            return Response(
+                {"error": "Invalid state parameter"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Exchange authorization code for tokens
+            client_id = settings.GOOGLE_CLIENT_ID
+            client_secret = settings.GOOGLE_CLIENT_SECRET
+            redirect_uri = request.build_absolute_uri(reverse("authentication:google-callback"))
+
+            # Request tokens from Google
+            token_url = "https://oauth2.googleapis.com/token"
+            token_data = {
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            }
+
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+            print(f"Token Request Data: {token_data}")
+            token_response = requests.post(token_url, data=token_data, headers=headers)
+
+            print(f"Token Response Status: {token_response.status_code}")
+            print(f"Token Response Content: {token_response.text}")
+
+            if token_response.status_code != 200:
+                return Response(
+                    {"error": f"Failed to authenticate with Google: {token_response.text}"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            tokens = token_response.json()
+
+            # Get user info from Google
+            userinfo_url = "https://www.googleapis.com/oauth2/v2/userinfo"
+            headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+            userinfo_response = requests.get(userinfo_url, headers=headers)
+
+            print(f"UserInfo Response Status: {userinfo_response.status_code}")
+            print(f"UserInfo Response Content: {userinfo_response.text}")
+
+            if userinfo_response.status_code != 200:
+                return Response(
+                    {"error": f"Failed to get user info from Google: {userinfo_response.text}"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            userinfo = userinfo_response.json()
+
+            # Get or create user
+            email = userinfo["email"]
+            first_name = userinfo.get("given_name", "")
+            last_name = userinfo.get("family_name", "")
+            profile_picture = userinfo.get("picture")
+
+            try:
+                user = User.objects.get(email=email)
+
+                # Update user info if needed
+                if first_name and not user.first_name:
+                    user.first_name = first_name
+                if last_name and not user.last_name:
+                    user.last_name = last_name
+                if profile_picture and not user.profile_picture:
+                    user.profile_picture = profile_picture
+                user.save()
+
+            except User.DoesNotExist:
+                # Create new user
+                username = email.split("@")[0]
+                base_username = username
+                counter = 1
+
+                while User.objects.filter(username=username).exists():
+                    username = f"{base_username}{counter}"
+                    counter += 1
+
+                user = User.objects.create(
+                    username=username,
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    profile_picture=profile_picture,
+                    email_verified=True,
+                )
+                user.set_unusable_password()
+                user.save()
+
+            # Generate tokens
+            refresh = RefreshToken.for_user(user)
+            access = CustomAccessToken.for_user(user)
+
+            # Clear the state from session
+            if "oauth_state" in request.session:
+                del request.session["oauth_state"]
+
+            return Response(
+                {"access": str(access), "refresh": str(refresh), "user": UserSerializer(user).data}
+            )
+
+        except requests.exceptions.RequestException as e:
+            print(f"Request Exception: {str(e)}")
+            return Response(
+                {"error": f"Failed to authenticate with Google: {str(e)}"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        except Exception as e:
+            print(f"General Exception: {str(e)}")
+            return Response(
+                {"error": f"An error occurred: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST
+            )
